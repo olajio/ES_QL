@@ -1,0 +1,4 @@
+FROM prod:filebeat-*
+| WHERE @timestamp > NOW() - 5 minutes AND message LIKE "*Exception while executing excel map*" AND service.name == "Excel_Container" AND log.level == "ERROR" AND labels.client_code == "SRSMPROD" AND NOT message LIKE "*Recon*"
+| STATS message = TOP(message, 1, "desc"), client_code = TOP(labels.client_code, 1, "desc"), app_code = TOP(labels.app_code, 1, "desc") BY host.hostname
+| LIMIT 10000
