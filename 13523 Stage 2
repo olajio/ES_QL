@@ -1,0 +1,8 @@
+FROM kibana_threshold_alerts
+| WHERE @timestamp > NOW() - 5 minutes AND event_type == "13523"
+| RENAME host.hostname AS hostname.keyword
+| LOOKUP JOIN kibana_sdp_amdb ON hostname.keyword
+| MV_EXPAND group
+| WHERE group == "13523" AND alert_status == "enabled"
+| KEEP hostname.keyword, event_type, labels.app_code, labels.client_code, message
+| LIMIT 10000
