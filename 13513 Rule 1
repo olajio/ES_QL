@@ -1,0 +1,4 @@
+FROM prod:filebeat-*
+| WHERE @timestamp > NOW() - 5 minutes AND message LIKE "ValueError: dictionary update sequence element #0 has length 1; 2 is required" AND service.name LIKE "*Container*"
+| STATS message = TOP(message, 1, "desc"), client_code = TOP(labels.client_code, 1, "desc"), app_code = TOP(labels.app_code, 1, "desc") BY host.hostname
+| LIMIT 10000
