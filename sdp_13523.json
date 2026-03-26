@@ -1,0 +1,440 @@
+{
+  "trigger": {
+    "schedule": {
+      "cron": [
+        "0 */5 * ? * MON-FRI",
+        "0 */5 0-3 ? * SAT",
+        "0 */5 17-23 ? * SUN"
+      ]
+    }
+  },
+  "input": {
+    "chain": {
+      "inputs": [
+        {
+          "groups": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "sdp_amdb"
+                ],
+                "rest_total_hits_as_int": true,
+                "body": {
+                  "size": 0,
+                  "query": {
+                    "bool": {
+                      "filter": [
+                        {
+                          "bool": {
+                            "must_not": {
+                              "bool": {
+                                "filter": [
+                                  {
+                                    "bool": {
+                                      "should": [
+                                        {
+                                          "range": {
+                                            "maintanace.utc_end": {
+                                              "gt": "now"
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "range": {
+                                            "maintanace.utc_start": {
+                                              "lt": "now"
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "minimum_should_match": 2
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "term": {
+                            "group": "{{ ctx.metadata.event_type }}"
+                          }
+                        },
+                        {
+                          "term": {
+                            "alert_status": "enabled"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "aggs": {
+                    "hosts": {
+                      "terms": {
+                        "field": "hostname.keyword",
+                        "size": 5000
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "groups_hosts": {
+            "transform": {
+              "script": {
+                "source": """
+                // flatten the list of hostnames to use in the errors input
+                return ctx.payload.groups.aggregations.hosts.buckets.stream().map(b -> b.key).collect(Collectors.toList());""",
+                "lang": "painless"
+              }
+            }
+          }
+        },
+        {
+          "errors": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "prod:filebeat-*"
+                ],
+                "rest_total_hits_as_int": true,
+                "template": {
+                  "source": """
+                    {
+                        "size": 0,
+                        "query": {
+                          "bool": {
+                            "filter": [
+                              {
+                                "terms": {
+                                  "_tier": [
+                                    "{{ ctx.metadata.data_hot }}",
+                                    "{{ ctx.metadata.data_content }}"
+                                  ]
+                                }
+                              },
+                              {
+                                "terms": {
+                                  "host.hostname": {{#toJson}}ctx.payload.groups_hosts._value{{/toJson}}
+                                }
+                              },
+                              {
+                                "range": {
+                                  "@timestamp": {
+                                    "gt": "now-{{ ctx.metadata.timeRangeValue }}{{ ctx.metadata.timeRangeUnit }}"
+                                  }
+                                }
+                              },
+                              {
+                                "term": {
+                                  "service.name": "Excel_Container"
+                                }
+                              },
+                              {
+                                "bool": {
+                                  "should": [
+                                    {
+                                      "match_phrase": {
+                                        "message": "Exception while executing excel map"
+                                      }
+                                    }
+                                  ],
+                                  "minimum_should_match": 1
+                                }
+                              },
+                              {
+                                "match_phrase": {
+                                  "log.level": "ERROR"
+                                }
+                              }
+                            ],
+                            "must": [
+                              {
+                                "term": {
+                                  "labels.client_code": {
+                                    "value": "SRSMPROD"
+                                  }
+                                }
+                              }
+                            ],
+                            "must_not": [
+                              {
+                                "match_phrase": {
+                                  "message": "Recon"
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "aggs": {
+                          "hosts": {
+                            "terms": {
+                              "field": "host.hostname",
+                              "size": 5000
+                            },
+                            "aggs": {
+                                "client": {
+                                    "top_hits": {
+                                      "size": 1,
+                                      "_source": {
+                                        "includes": [
+                                          "labels.client_code",
+                                          "message",
+                                          "service.name"
+                                        ]
+                                      }
+                                    }
+                                }
+                            }
+                          }
+                        }
+                    }
+                    """,
+                  "lang": "mustache"
+                }
+              }
+            }
+          }
+        },
+        {
+          "hosts": {
+            "transform": {
+              "script": {
+                "source": """
+                // flatten the list of hostnames to use in the open_tickets input
+                return ctx.payload.errors.aggregations.hosts.buckets.stream().map(b -> b.key).collect(Collectors.toList());""",
+                "lang": "painless"
+              }
+            }
+          }
+        },
+        {
+          "open_tickets": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "sdp_tickets"
+                ],
+                "rest_total_hits_as_int": true,
+                "template": {
+                  "source": """
+                        {
+                          "size": 5000,
+                          "query": {
+                            "bool": {
+                              "filter": [
+                                {
+                                  "terms": {
+                                    "host.hostname": {{#toJson}}ctx.payload.hosts._value{{/toJson}}
+                                  }
+                                },
+                                {
+                                  "term": {
+                                    "status": "open"
+                                  }
+                                },
+                                {
+                                  "term": {
+                                    "event_type": "{{ ctx.metadata.event_type }}"
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                        """,
+                  "lang": "mustache"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "condition": {
+    "script": {
+      "source": """
+        // if we have any hosts we need to check them...
+        return ctx.payload.errors.aggregations.hosts.buckets.size() > 0;
+    """,
+      "lang": "painless"
+    }
+  },
+  "actions": {
+    "notify_msteams": {
+      "condition": {
+        "script": {
+          "source": "ctx.payload.to_notify_msteams.size() > 0",
+          "lang": "painless"
+        }
+      },
+      "foreach": "ctx.payload.to_notify_msteams",
+      "max_iterations": 100,
+      "email": {
+        "profile": "standard",
+        "to": [
+          "5fbe1816.hedgeservcorp.onmicrosoft.com@amer.teams.ms"
+        ],
+        "subject": "{{ ctx.metadata.current_value }}",
+        "body": {
+          "html": """<p>{{ ctx.metadata.amdb_name }}</p> <p>{{ ctx.execution_time }}</p> <p>Threshold: {{ ctx.metadata.threshold }}</p> <p>Error message:<br/> {{ ctx.payload.client.hits.hits.0._source.message }}</p> <p><a href="{{ctx.metadata.dashboard_link}}">Dashboard Link</a></p> <p><a href="{{ctx.metadata.amdb_link}}">AMDB Article</a></p>"""
+        }
+      }
+    },
+    "comment_tickets": {
+      "condition": {
+        "script": {
+          "source": "ctx.payload.to_comment.size() > 0",
+          "lang": "painless"
+        }
+      },
+      "foreach": "ctx.payload.to_comment",
+      "max_iterations": 5000,
+      "webhook": {
+        "scheme": "https",
+        "host": "elk-support.hedgeserv.com",
+        "port": 443,
+        "method": "put",
+        "path": "/api/v3/requests/{{ ctx.payload.ticket_id }}",
+        "params": {
+          "input_data": """{
+            "request": {
+                "udf_fields": {
+                    "udf_sline_96001": "{{ ctx.trigger.triggered_time }}"
+                }
+            }
+        }"""
+        },
+        "headers": {
+          "technician_key": "XXXXXXXXXXXXXXXXXXX",
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        "connection_timeout_in_millis": 30000,
+        "read_timeout_millis": 30000
+      }
+    },
+    "open_tickets": {
+      "condition": {
+        "script": {
+          "source": "ctx.payload.to_open.size() > 0",
+          "lang": "painless"
+        }
+      },
+      "foreach": "ctx.payload.to_open",
+      "max_iterations": 5000,
+      "webhook": {
+        "scheme": "https",
+        "host": "elk-support.hedgeserv.com",
+        "port": 443,
+        "method": "post",
+        "path": "/api/v3/requests",
+        "params": {
+          "input_data": """{
+                "request": {
+                  "subject": "{{ ctx.metadata.event_type }} - {{ ctx.payload.client.hits.hits.0._source.service.name }} - {{ ctx.payload.key }}",
+                  "description": "<h3>{{ ctx.metadata.amdb_name }}</h3><p><b>Monitor name:</b> {{ ctx.payload.key }}</p><p><b>Treshold:</b> {{ ctx.metadata.threshold }}</p><p><b>Current value:</b> {{ ctx.metadata.current_value }}</p><p><b><a href='{{ctx.metadata.amdb_link}}'>AMDB</a></b></p><p><b><a href='{{ctx.metadata.dashboard_link}}'>Dashboard</a></b></p><p><b>Error Message:</b> {{ ctx.payload.client.hits.hits.0._source.message }}</p>",
+                  "requester": {
+                     "name": "service-elastic"
+                  },
+                  "template": {
+                     "name": "Elastic Search Alerts"
+                  },
+                  "service_category": {
+                     "name": "Report an Incident"
+                  },
+                  "priority": {
+                     "name": "{{ ctx.metadata.ticket_priority }}"
+                  },
+                  "group": {
+                     "name": "{{ ctx.metadata.ticket_group }}"
+                  },
+                  "status": {
+                     "name": "Open"
+                  },
+                  "udf_fields": {
+                     "udf_sline_49837": "{{ ctx.trigger.triggered_time }}",
+                     "udf_sline_53701": "",
+                     "udf_sline_49808": "{{ ctx.metadata.event_type }}",
+                     "udf_sline_49805": "{{ ctx.payload.key }}",
+                     "udf_sline_53703": "{{ ctx.metadata.service_name }}",
+                     "udf_sline_55201": "[{{ #ctx.payload.client.buckets }}{{key}}{{ /ctx.payload.client.buckets }}]"
+                  },
+                  "category": {
+                     "name": "Elastic"
+                  },
+                  "subcategory": {
+                     "name": "Server Health"
+                  }
+                }
+              }"""
+        },
+        "headers": {
+          "technician_key": "XXXXXXXXXXXXXXXXXXX",
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      }
+    }
+  },
+  "metadata": {
+    "service_name": "Excel Container",
+    "amdb_name": "13523 - Excel map failure",
+    "ticket_priority": "1 - Critical",
+    "amdb_link": "https://hedgeservcorp.sharepoint.com/sites/globaltechnology/amdb/sitepages/13523.aspx?web=1",
+    "threshold": "Excel Container Error",
+    "data_content": "data_content",
+    "teams_webhook_prod": "/webhookb2/f228005d-2891-4b18-81a1-c98eca2b867c@39e63823-376a-43fc-9fdd-4a3932faab97/IncomingWebhook/76bde94165f04e828c72a33ee65123b5/535a32ca-0c5b-41cb-aaa9-dd0ed0f6628f/V23ljHvcHCzcqqP39lSxJL1BPFTiBLyZUzdG--3k3r8RA1",
+    "timeRangeUnit": "m",
+    "current_value": "Exception while executing excel map",
+    "agg_type": "avg",
+    "event_type": "13523",
+    "timeRangeValue": 5,
+    "dashboard_link": "https://287d86a4b1184182b340bd5074cdfd7e.us-east-1.aws.found.io:9243/s/information-technology/app/r/s/MZfnj",
+    "ticket_group": "Service Desk Operations",
+    "id": "sdp_13523",
+    "data_hot": "data_hot"
+  },
+  "transform": {
+    "script": {
+      "source": """
+        // grab hostnames with open tickets and remember their IDs in a map
+        Map opened = ctx.payload.open_tickets.hits.hits.stream().collect(Collectors.toMap(h -> h._source.host.hostname, h -> h._source.ticket_id));
+
+        // store two lists of host buckets
+        List to_open = [];
+        List to_comment = [];
+        List to_notify_msteams = [];
+        for (Map host: ctx.payload.errors.aggregations.hosts.buckets) {
+
+          // Always add the hostname to the list to_notify_ms_teams (send MSTeams alert)
+           String message = host.client.hits.hits.0._source.message;
+            message = message.replace('"', ' ');
+            message = message.replace('\\', '\\\\');
+            message = /\n/.matcher(message).replaceAll(' ');
+            host.client.hits.hits.0._source.message = message;
+            to_notify_msteams.add(host);
+          if (opened.containsKey(host.key)) {
+            // annotate hosts that need to be opened with ticket ID
+            host.ticket_id = opened[host.key];
+            to_comment.add(host);
+          } else {
+            to_open.add(host);
+          }
+        }
+        // replace payload with our two lists
+        return [
+          'to_open': to_open,
+          'to_comment': to_comment,
+          'to_notify_msteams': to_notify_msteams
+        ];
+        """,
+      "lang": "painless"
+    }
+  }
+}
