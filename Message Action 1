@@ -1,0 +1,39 @@
+{
+  "target": "{{context.hits.0._source.hostname.keyword}}",
+  "event_type": "13513",
+  "event_uuid": "on-prem_13513_{{context.hits.0._source.hostname.keyword}}",
+  "alarm_name": "13513 - Python Container ValueError: dictionary update sequence element #0 has length 1; 2 is required",
+  "trace": {
+    "id": "{{alert.uuid}}"
+  },
+  "tags_to_exclude": "NA",
+  "cloud": {
+    "region": "NA",
+    "account": {
+      "name": "NA",
+      "id": "NA"
+    }
+  },
+  "labels": {
+    "client_code": "{{context.hits.0._source.labels.client_code}}"
+  },
+  "@timestamp": "{{date}}",
+  "dashboard_link": "https://287d86a4b1184182b340bd5074cdfd7e.us-east-1.aws.found.io:9243/s/information-technology/app/r/s/LXrtY",
+  "amdb_link": "https://hedgeservcorp.sharepoint.com/:u:/s/GlobalTechnology/AMDB/EQtr5fQFb-1MleQ7g3JGLvcBTt7bhkA9V19LVaezB99hVw?e=afD4xw",
+  "service": {
+    "type": "kibana_alerts",
+    "name": "log_alerts"
+  },
+  "alarm_tags": {
+    "hs:app:maintenance-window": "true",
+    "hs:std:app-name": "NA",
+    "hs:app:amdb": "13513",
+    "hs:app:sdp-priority": "2 - High",
+    "hs:std:svc-operator": "NA",
+    "hs:std:svc-software-owner": "NA",
+    "hs:app:monitored": "true",
+    "hs:std:app-code": "{{context.hits.0._source.labels.app_code}}",
+    "hs:app:ticket-group": "Monitoring and Analytics - Testing"
+  },
+  "alarm_reason": "{{context.hits.0._source.message}}"
+}
