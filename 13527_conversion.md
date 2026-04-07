@@ -40,43 +40,19 @@ FROM kibana_threshold_alerts
 
 ```json
 {
-  "target": "{{context.hits.0._source.client.keyword}}",
-  "event_type": "13527",
-  "event_uuid": "on-prem_13527_{{context.hits.0._source.client.keyword}}",
-  "alarm_name": "13527 - SQL Server Does not Exist or Access Denied",
-  "trace": {
-    "id": "{{alert.uuid}}"
-  },
-  "tags_to_exclude": "NA",
-  "cloud": {
-    "region": "NA",
-    "account": {
-      "name": "NA",
-      "id": "NA"
-    }
+  "message": "{{context.hits.0._source.message}}",
+  "host": {
+    "hostname": "{{context.hits.0._source.host.hostname}}"
   },
   "labels": {
-    "client_code": "{{context.hits.0._source.labels.client_code}}"
+    "client_code": "{{context.hits.0._source.labels.client_code}}",
+    "app_code": "{{context.hits.0._source.labels.app_code}}"
   },
-  "@timestamp": "{{date}}",
-  "dashboard_link": "https://287d86a4b1184182b340bd5074cdfd7e.us-east-1.aws.found.io:9243/s/information-technology/app/r/s/8TRQw",
-  "amdb_link": "https://hedgeservcorp.sharepoint.com/sites/GlobalTechnology/AMDB/SitePages/13527.aspx",
   "service": {
-    "type": "kibana_alerts",
-    "name": "log_alerts"
+    "name": "{{context.hits.0._source.service.name}}"
   },
-  "alarm_tags": {
-    "hs:app:maintenance-window": "true",
-    "hs:std:app-name": "NA",
-    "hs:app:amdb": "13527",
-    "hs:app:sdp-priority": "1 - Critical",
-    "hs:std:svc-operator": "NA",
-    "hs:std:svc-software-owner": "NA",
-    "hs:app:monitored": "true",
-    "hs:std:app-code": "{{context.hits.0._source.labels.app_code}}",
-    "hs:app:ticket-group": "Monitoring and Analytics - Testing"
-  },
-  "alarm_reason": "{{context.hits.0._source.message}}"
+  "event_type": "13527",
+  "@timestamp": "{{context.date}}"
 }
 ```
 
