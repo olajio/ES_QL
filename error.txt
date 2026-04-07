@@ -1,0 +1,1 @@
+Error testing query: [esql] > Unexpected error from Elasticsearch: verification_exception - Found 2 problems line 7:53: Unknown column [labels.client_code], did you mean [labels.app_code]? line 7:97: Unknown column [service.name]
