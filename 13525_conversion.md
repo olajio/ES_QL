@@ -36,7 +36,8 @@ FROM kibana_threshold_alerts
   },
   "event_type": "13525",
   "@timestamp": "{{context.date}}"
-}```
+}
+```
 
 ## 13525 Message Action 2
 
