@@ -26,45 +26,17 @@ FROM kibana_threshold_alerts
 
 ```json
 {
-  "target": "{{context.hits.0._source.hostname.keyword}}",
-  "event_type": "13525",
-  "event_uuid": "on-prem_13525_{{context.hits.0._source.hostname.keyword}}",
-  "alarm_name": "13525 - Deleting Multi Report Subs from Datastream",
-  "trace": {
-    "id": "{{alert.uuid}}"
-  },
-  "tags_to_exclude": "NA",
-  "cloud": {
-    "region": "NA",
-    "account": {
-      "name": "NA",
-      "id": "NA"
-    }
+  "message": "{{context.hits.0._source.message}}",
+  "host": {
+    "hostname": "{{context.hits.0._source.host.hostname}}"
   },
   "labels": {
-    "client_code": "{{context.hits.0._source.labels.client_code}}"
+    "client_code": "{{context.hits.0._source.labels.client_code}}",
+    "app_code": "{{context.hits.0._source.labels.app_code}}"
   },
-  "@timestamp": "{{date}}",
-  "dashboard_link": "https://287d86a4b1184182b340bd5074cdfd7e.us-east-1.aws.found.io:9243/s/information-technology/app/r/s/i1snO",
-  "amdb_link": "https://hedgeservcorp.sharepoint.com/sites/GlobalTechnology/AMDB/SitePages/13525.aspx",
-  "service": {
-    "type": "kibana_alerts",
-    "name": "log_alerts"
-  },
-  "alarm_tags": {
-    "hs:app:maintenance-window": "true",
-    "hs:std:app-name": "NA",
-    "hs:app:amdb": "13525",
-    "hs:app:sdp-priority": "2 - High",
-    "hs:std:svc-operator": "NA",
-    "hs:std:svc-software-owner": "NA",
-    "hs:app:monitored": "true",
-    "hs:std:app-code": "{{context.hits.0._source.labels.app_code}}",
-    "hs:app:ticket-group": "Monitoring and Analytics - Testing"
-  },
-  "alarm_reason": "{{context.hits.0._source.message}}"
-}
-```
+  "event_type": "13525",
+  "@timestamp": "{{context.date}}"
+}```
 
 ## 13525 Message Action 2
 
