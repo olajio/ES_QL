@@ -23,7 +23,7 @@ FROM kibana_threshold_alerts
 | LOOKUP JOIN kibana_sdp_amdb ON client.keyword
 | MV_EXPAND group
 | WHERE group == "13527"
-| KEEP client.keyword, event_type, labels.app_code, labels.client_code, message, host.hostname, service.name
+| KEEP client.keyword, event_type, labels.app_code, message, host.hostname
 | LIMIT 10000
 ```
 
