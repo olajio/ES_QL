@@ -1,0 +1,445 @@
+{
+  "trigger": {
+    "schedule": {
+      "cron": [
+        "0 */5 * ? * MON-FRI",
+        "0 */5 0-3 ? * SAT",
+        "0 */5 17-23 ? * SUN"
+      ]
+    }
+  },
+  "input": {
+    "chain": {
+      "inputs": [
+        {
+          "groups": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "sdp_amdb"
+                ],
+                "rest_total_hits_as_int": true,
+                "body": {
+                  "size": 0,
+                  "query": {
+                    "bool": {
+                      "filter": [
+                        {
+                          "bool": {
+                            "must_not": {
+                              "bool": {
+                                "filter": [
+                                  {
+                                    "bool": {
+                                      "should": [
+                                        {
+                                          "range": {
+                                            "maintanace.utc_end": {
+                                              "gt": "now"
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "range": {
+                                            "maintanace.utc_start": {
+                                              "lt": "now"
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "minimum_should_match": 2
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "term": {
+                            "group": "{{ ctx.metadata.event_type }}"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "aggs": {
+                    "hosts": {
+                      "terms": {
+                        "field": "client.keyword",
+                        "size": 5000
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "groups_hosts": {
+            "transform": {
+              "script": {
+                "source": """
+                // flatten the list of hostnames to use in the errors input
+                return ctx.payload.groups.aggregations.hosts.buckets.stream().map(b -> b.key).collect(Collectors.toList());""",
+                "lang": "painless"
+              }
+            }
+          }
+        },
+        {
+          "errors": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "prod:filebeat-*"
+                ],
+                "rest_total_hits_as_int": true,
+                "template": {
+                  "source": """
+                    {
+                        "size": 0,
+                        "query": {
+                          "bool": {
+                            "filter": [
+                              {
+                                "terms": {
+                                  "_tier": [
+                                    "{{ ctx.metadata.data_hot }}",
+                                    "{{ ctx.metadata.data_content }}"
+                                  ]
+                                }
+                              },
+                              {
+                                "terms": {
+                                    "labels.client_code": {{#toJson}}ctx.payload.groups_hosts._value{{/toJson}}
+                                }
+                              },
+                              {
+                                "range": {
+                                  "@timestamp": {
+                                    "gt": "now-{{ ctx.metadata.timeRangeValue }}{{ ctx.metadata.timeRangeUnit }}"
+                                  }
+                                }
+                              },
+                              {
+                                "bool": {
+                                  "should": [
+                                    {
+                                      "match_phrase": {
+                                        "message": "[DBNETLIB]SQL Server does not exist or access denied"
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ],
+                            "must_not": [
+                              {
+                                "terms": {
+                                  "labels.datacenter": ["CS51"]
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "aggs": {
+                          "buckets": {
+                            "composite": {
+                              "sources": [
+                                {
+                                  "client": {
+                                    "terms": {"field": "labels.client_code"}
+                                  }
+                                },
+                                {
+                                  "host": {
+                                    "terms": {"field": "host.hostname"}
+                                  }
+                                },
+                                {
+                                  "service": {
+                                    "terms": {"field": "service.name"}
+                                  }
+                                }
+                              ],
+                              "size": 10000
+                            },
+                            "aggs": {
+                              "details": {
+                                "top_hits": {
+                                  "size": 1,
+                                  "_source": {
+                                    "includes": [
+                                      "message",
+                                      "service.type"
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    """,
+                  "lang": "mustache"
+                }
+              }
+            }
+          }
+        },
+        {
+          "hosts": {
+            "transform": {
+              "script": {
+                "source": """
+                // flatten the list of clients to use in the open_tickets input
+                Set clients = new HashSet();
+                for (Map client: ctx.payload.errors.aggregations.buckets.buckets) {
+                  clients.add(client.key.client);
+                }
+                return clients;""",
+                "lang": "painless"
+              }
+            }
+          }
+        },
+        {
+          "open_tickets": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "sdp_tickets"
+                ],
+                "rest_total_hits_as_int": true,
+                "template": {
+                  "source": """
+                        {
+                          "size": 100,
+                          "query": {
+                            "bool": {
+                              "filter": [
+                                {
+                                  "terms": {
+                                    "host.hostname": {{#toJson}}ctx.payload.hosts._value{{/toJson}}
+                                  }
+                                },
+                                {
+                                  "term": {
+                                    "status": "open"
+                                  }
+                                },
+                                {
+                                  "term": {
+                                    "event_type": "{{ ctx.metadata.event_type }}"
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                        """,
+                  "lang": "mustache"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "condition": {
+    "script": {
+      "source": """
+        // if we have any hosts we need to check them...
+        return ctx.payload.hosts._value.size() > 0;
+    """,
+      "lang": "painless"
+    }
+  },
+  "actions": {
+    "open_tickets": {
+      "condition": {
+        "script": {
+          "source": "ctx.payload.to_open.size() > 0",
+          "lang": "painless"
+        }
+      },
+      "foreach": "ctx.payload.to_open",
+      "max_iterations": 100,
+      "webhook": {
+        "scheme": "https",
+        "host": "elk-support.hedgeserv.com",
+        "port": 443,
+        "method": "post",
+        "path": "/api/v3/requests",
+        "params": {
+          "input_data": """{
+                "request": {
+                  "subject": "{{ctx.metadata.event_type}} - {{ ctx.metadata.amdb_name }} - {{ ctx.payload.key }}",
+                  "description": "<h3>{{ ctx.metadata.amdb_name }}</h3><p>Client: {{ ctx.payload.key }}</p><p>Hosts and Services: {{ ctx.payload.hostsServices }}</p><p>Messages (Only the top 5 messages from the results will be shown; for the rest look in the Dashboard link): {{ ctx.payload.message }}</p><p><a href='{{ctx.metadata.amdb_link}}'>AMDB</a></p><p><a href='{{ctx.metadata.dashboard_link}}'>Dashboard</a></p>",
+                  "requester": {
+                     "name": "service-elastic"
+                  },
+                  "template": {
+                     "name": "Elastic Search Alerts"
+                  },
+                  "service_category": {
+                     "name": "Report an Incident"
+                  },
+                  "priority": {
+                     "name": "{{ ctx.metadata.ticket_priority }}"
+                  },
+                  "group": {
+                     "name": "{{ ctx.metadata.ticket_group }}"
+                  },
+                  "status": {
+                      "name": "Open"
+                  },
+                  "udf_fields": {
+                     "udf_sline_49837": "{{ ctx.trigger.triggered_time }}",
+                     "udf_sline_53701": "", 
+                     "udf_sline_49808": "{{ ctx.metadata.event_type }}",
+                     "udf_sline_49805": "{{ ctx.payload.key }}",
+                     "udf_sline_53703": "",
+                     "udf_sline_55201": ""
+                  },
+                  "category": {
+                     "name": "Elastic"
+                  },
+                  "subcategory": {
+                     "name": "Server Health"
+                  }
+                }
+              }"""
+        },
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "technician_key": "XXXXXXXXXXXXXXXXXXX"
+        }
+      }
+    },
+    "comment_tickets": {
+      "condition": {
+        "script": {
+          "source": "ctx.payload.to_comment.size() > 0",
+          "lang": "painless"
+        }
+      },
+      "foreach": "ctx.payload.to_comment",
+      "max_iterations": 100,
+      "webhook": {
+        "scheme": "https",
+        "host": "elk-support.hedgeserv.com",
+        "port": 443,
+        "method": "put",
+        "path": "/api/v3/requests/{{ ctx.payload.ticket_id }}",
+        "params": {
+          "input_data": """{
+            "request": {
+                "udf_fields": {
+                    "udf_sline_96001": "{{ ctx.trigger.triggered_time }}"
+                }
+            }
+        }"""
+        },
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "technician_key": "XXXXXXXXXXXXXXXXXXX"
+        },
+        "connection_timeout_in_millis": 30000,
+        "read_timeout_millis": 30000
+      }
+    }
+  },
+  "metadata": {
+    "amdb_name": "SQL Server Does not Exist or Access Denied",
+    "ticket_priority": "1 - Critical",
+    "amdb_link": "https://hedgeservcorp.sharepoint.com/sites/GlobalTechnology/AMDB/SitePages/13527.aspx",
+    "data_content": "data_content",
+    "timeRangeUnit": "m",
+    "event_type": "13527",
+    "timeRangeValue": 5,
+    "dashboard_link": "https://287d86a4b1184182b340bd5074cdfd7e.us-east-1.aws.found.io:9243/s/information-technology/app/r/s/8TRQw",
+    "ticket_group": "Service Desk Operations",
+    "id": "sdp_13527",
+    "data_hot": "data_hot"
+  },
+  "transform": {
+    "script": {
+      "source": """
+        // grab hostnames with open tickets and remember their IDs in a map
+        Map opened = ctx.payload.open_tickets.hits.hits.stream().collect(Collectors.toMap(h -> h._source.host.hostname, h -> h._source.ticket_id));
+        
+        // store two lists of host buckets
+        List to_open = [];
+        List to_comment = [];
+        Map results = new HashMap();
+        // Counter to check the number of messages per client; we want to show up to 5 messages for a client
+        def messageCounter = 0;
+        String clientString = '';
+        String logMessage = '';
+        for (Map bucket: ctx.payload.errors.aggregations.buckets.buckets) {
+            if (clientString.equals(bucket.key.client)) {
+              messageCounter += messageCounter;
+            } else {
+              messageCounter = 1;
+              clientString = bucket.key.client;
+            }
+            
+            String hostServPair = '(' + bucket.key.host + ' : ' + bucket.key.service + '), ';
+            if (messageCounter < 6) {
+              logMessage = '<br><br>' + bucket.details.hits.hits.0._source.message;
+            } else {
+              logMessage = '';
+            }
+            if (results.containsKey(bucket.key.client)) {
+                Map client = results[bucket.key.client];
+                // client.hostsServices.add(hostServPair);
+                client.hostsServices += hostServPair;
+                client.message += logMessage;
+                results[bucket.key.client] = client;
+            } else {
+                Map client = new HashMap();
+                // List hostServicePairs = [];
+                // hostServicePairs.add(hostServPair);
+                // client.hostsServices = hostServicePairs;
+                client.hostsServices = hostServPair;
+                client.key = bucket.key.client;
+                client.message = logMessage;
+                results[bucket.key.client] = client;
+            }
+        }
+        for (def client_env: ctx.payload.hosts._value) {
+        
+          Map client = results[client_env];
+          
+          
+          if (opened.containsKey(client.key)) {
+            // annotate hosts that need to be opened with ticket ID
+            client.ticket_id = opened[client.key];
+            to_comment.add(client);
+          } else {
+            // either no ticket for the host, or a closed one, open a new one
+            String message = client.message;
+            message = message.replace('"', ' ');
+            message = message.replace('\\', '\\\\');
+            message = /\n/.matcher(message).replaceAll(' ');
+            client.message = message;
+            to_open.add(client);
+          }
+        }
+        // replace payload with our two lists
+        return [
+          'to_open': to_open,
+          'to_comment': to_comment
+        ];
+        """,
+      "lang": "painless"
+    }
+  }
+}
