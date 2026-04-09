@@ -1,0 +1,422 @@
+{
+  "trigger": {
+    "schedule": {
+      "cron": [
+        "0 0/5 * ? * MON-FRI",
+        "0 0/5 0-3 ? * SAT",
+        "0 0/5 17-23 ? * SUN"
+      ]
+    }
+  },
+  "input": {
+    "chain": {
+      "inputs": [
+        {
+          "sdpmt": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "sdpmt_amdb"
+                ],
+                "rest_total_hits_as_int": true,
+                "body": {
+                  "size": 10,
+                  "query": {
+                    "bool": {
+                      "filter": [
+                        {
+                          "match_phrase": {
+                            "target.keyword": "{{ ctx.metadata.event_type }}"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "aggs": {
+                    "target": {
+                      "terms": {
+                        "field": "target.keyword",
+                        "size": 100
+                      },
+                      "aggs": {
+                        "hits": {
+                          "top_hits": {
+                            "_source": [
+                              "alert_status",
+                              "tag_to_exclude"
+                            ],
+                            "size": 20
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "sdpmt_tag_to_exclude": {
+            "transform": {
+              "script": {
+                "source": """
+                  // flatten the list of hostnames to use in the errors input
+                  return ctx.payload.sdpmt.aggregations.target.buckets[0].hits.hits.hits[0]._source.tag_to_exclude;""",
+                "lang": "painless"
+              }
+            }
+          }
+        },
+        {
+          "errors": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "prod:filebeat-*-mt-prd"
+                ],
+                "rest_total_hits_as_int": true,
+                "template": {
+                  "source": """
+                      {
+                        "size": 0,
+                        "query": {
+                          "bool": {
+                            "filter": [
+                              {
+                                "terms": {
+                                  "_tier": [
+                                    "data_hot",
+                                    "data_content",
+                                    "data_frozen"
+                                    ]
+                                }
+                              },
+                              {
+                                "range": {
+                                  "@timestamp": {
+                                    "gte": "now-{{ ctx.metadata.timeRangeValue }}{{ ctx.metadata.timeRangeUnit }}"
+                                  }
+                                }
+                              },
+                              {
+                                "bool": {
+                                  "minimum_should_match": 1,
+                                  "should": [
+                                    {
+                                      "match_phrase": {
+                                        "service.name": "Web Auth"
+                                      }
+                                    },
+                                    {
+                                      "match_phrase": {
+                                        "service.name": "web-auth"
+                                      }
+                                    }
+                                  ]
+                                }
+                              },
+                              {
+                                "match_phrase": {
+                                  "log.level": "ERROR"
+                                }
+                              },
+                              {
+                                "match_phrase": {
+                                  "message": "Failed to query Active Directory"
+                                }
+                              }
+                            ],
+                            "must_not": [
+                              {
+                                "match_phrase": {
+                                  "message": "[USAGE]"
+                                }
+                              },
+                              {
+                                "terms": {
+                                  "not_defined_yet": {{#toJson}}ctx.payload.sdpmt_tag_to_exclude._value{{/toJson}}
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "aggs": {
+                          "host": {
+                            "terms": {
+                              "field": "host.hostname",
+                              "size": 500
+                            },
+                            "aggs": {
+                              "details": {
+                                "top_hits": {
+                                  "_source": [
+                                    "@timestamp",
+                                    "log.level",
+                                    "service.name",
+                                    "kubernetes.labels.team",
+                                    "cloud.account.name"
+                                  ],
+                                  "size": 100
+                                }
+                              },
+                              "min_time": {
+                                "min": {
+                                  "field": "@timestamp"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                      """,
+                  "lang": "mustache"
+                }
+              }
+            }
+          }
+        },
+        {
+          "targets_to_alert_on": {
+            "transform": {
+              "script": {
+                "source": """
+                  // flatten the list of urls to use in the open_tickets input
+                  return ctx.payload.errors.aggregations.host.buckets.stream().map(b -> b.key).collect(Collectors.toList());""",
+                "lang": "painless"
+              }
+            }
+          }
+        },
+        {
+          "open_tickets": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "sdpmt_tickets"
+                ],
+                "rest_total_hits_as_int": true,
+                "template": {
+                  "source": """
+                      {
+                        "size": 5000,
+                        "query": {
+                          "bool": {
+                            "filter": [
+                              {
+                                "terms": {
+                                  "host.target": {{#toJson}}ctx.payload.targets_to_alert_on._value{{/toJson}}
+                                }
+                              },
+                              {
+                                "term": {
+                                  "status": "open"
+                                }
+                              },
+                              {
+                                "term": {
+                                  "event_type": "{{ ctx.metadata.event_type }}"
+                                }
+                              }
+                              ]
+                          }
+                        }
+                      }
+                      """,
+                  "lang": "mustache"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "condition": {
+    "script": {
+      "source": """
+        // Alert if have any results in the aggregation and the alert_status is enabled
+        return ctx.payload.errors.aggregations.host.buckets.size() > 0  && ctx.payload.sdpmt.hits.hits[0]._source.alert_status == 'enabled';
+        """,
+      "lang": "painless"
+    }
+  },
+  "actions": {
+    "comment_tickets": {
+      "condition": {
+        "script": {
+          "source": "ctx.payload.to_comment.size() > 0",
+          "lang": "painless"
+        }
+      },
+      "foreach": "ctx.payload.to_comment",
+      "max_iterations": 100,
+      "webhook": {
+        "scheme": "https",
+        "host": "elk-support.hedgeserv.com",
+        "port": 443,
+        "method": "put",
+        "path": "/api/v3/requests/{{ ctx.payload.ticket_id }}",
+        "params": {
+          "input_data": """{
+            "request": {
+                "udf_fields": {
+                    "udf_sline_96001": "{{ ctx.trigger.triggered_time }}"
+                }
+            }
+        }"""
+        },
+        "headers": {
+          "technician_key": "XXXXXXXXXXXXXXXXXXX",
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        "connection_timeout_in_millis": 30000,
+        "read_timeout_millis": 30000
+      }
+    },
+    "open_tickets": {
+      "condition": {
+        "script": {
+          "source": "ctx.payload.to_open.size() > 0",
+          "lang": "painless"
+        }
+      },
+      "foreach": "ctx.payload.to_open",
+      "max_iterations": 100,
+      "webhook": {
+        "scheme": "https",
+        "host": "elk-support.hedgeserv.com",
+        "port": 443,
+        "method": "post",
+        "path": "/api/v3/requests",
+        "params": {
+          "input_data": """{
+              "request": {
+                "subject": "TEST PLEASE IGNORE - {{ ctx.metadata.amdb_name }} for : {{ ctx.payload.key }}",
+                "description": "<h3>{{ ctx.metadata.amdb_name }}</h3><p><h4>Host: {{ ctx.payload.key }}</h4></p><p>Service Name: {{ ctx.payload.details.hits.hits.0._source.service.name }}</p><p><a href='{{ ctx.metadata.amdb_link }}'><font color=blue>AMDB Link</font></a></p><p>{{ ctx.metadata.copy_dsl }}</p><p><font color=blue>{{ ctx.metadata.kibana_url }}/app/discover#/view/6579322e-a8a4-4623-9ced-468ff88c9706?_g=(filters:!(),refreshInterval:(pause:!t,value:60000),time:(from:'{{ctx.payload.min_time.value_as_string}}',to:'{{ctx.trigger.triggered_time}}'))&_a=(columns:!(log.level,service.name,host.hostname,cloud.account.name,kubernetes.labels.team,message),dataSource:(dataViewId:'537f0c0a-3b04-5c03-8b9c-6eee829e73f8',type:dataView),filters:!(('$state':(store:appState),meta:(alias:!n,disabled:!f,field:service.name,index:'537f0c0a-3b04-5c03-8b9c-6eee829e73f8',key:service.name,negate:!f,params:!('Web%20Auth',web-auth),type:phrases,value:!('Web%20Auth',web-auth)),query:(bool:(minimum_should_match:1,should:!((match_phrase:(service.name:'Web%20Auth')),(match_phrase:(service.name:web-auth)))))),('$state':(store:appState),meta:(alias:!n,disabled:!f,field:log.level,index:'537f0c0a-3b04-5c03-8b9c-6eee829e73f8',key:log.level,negate:!f,params:(query:ERROR),type:phrase),query:(match_phrase:(log.level:ERROR))),('$state':(store:appState),meta:(alias:!n,disabled:!f,field:message,index:'537f0c0a-3b04-5c03-8b9c-6eee829e73f8',key:message,negate:!t,params:(query:%5BUSAGE%5D),type:phrase),query:(match_phrase:(message:%5BUSAGE%5D))),('$state':(store:appState),meta:(alias:!n,disabled:!f,field:message,index:'537f0c0a-3b04-5c03-8b9c-6eee829e73f8',key:message,negate:!f,params:(query:'Failed%20to%20query%20Active%20Directory'),type:phrase),query:(match_phrase:(message:'Failed%20to%20query%20Active%20Directory'))),('$state':(store:appState),meta:(alias:!n,disabled:!f,index:'537f0c0a-3b04-5c03-8b9c-6eee829e73f8',key:host.hostname,negate:!f,params:(query:{{ ctx.payload.key }}),type:phrase),query:(match_phrase:(host.hostname:{{ ctx.payload.key }})))),grid:(columns:(cloud.account.name:(width:175),host.hostname:(width:238),kubernetes.labels.team:(width:193),log.level:(width:121),service.name:(width:148))),hideChart:!f,interval:auto,query:(language:kuery,query:''),sort:!(!('@timestamp',desc)))</font></p><p>{{ ctx.metadata.extra_message }}</p>",
+                "requester": {
+                  "name": "service-elastic"
+                },
+                "template": {
+                  "name": "Elastic Search Alerts"
+                },
+                "service_category": {
+                  "name": "Report an Incident"
+                },
+                "priority": {
+                  "name": "{{ ctx.metadata.ticket_priority }}"
+                },
+                "group": {
+                  "name": "{{ ctx.metadata.ticket_group }}"
+                },
+                "status": {
+                  "name": "Onhold"
+                },
+                "technician": {
+                  "name": "Ola Ola"
+                },
+                "udf_fields": {
+                  "udf_sline_49837": "{{ ctx.trigger.triggered_time }}",
+                  "udf_sline_53701": "", 
+                  "udf_sline_49808": "{{ ctx.metadata.event_type }}",
+                  "udf_sline_49805": "{{ ctx.payload.key }}",
+                  "udf_sline_55201": "",
+                  "udf_sline_65101": "{{ ctx.payload.details.hits.hits.0._source.kubernetes.labels.team }}",
+                  "udf_sline_65102": "{{ ctx.payload.details.hits.hits.0._source.cloud.account.name }}",
+                  "udf_sline_65104": "{{ ctx.payload.details.hits.hits.0._source.cloud.region }}",
+                  "udf_sline_93302": "{{ ctx.payload.svc_software_owner }}"
+                },
+                "category": {
+                  "name": "{{ ctx.metadata.ticket_category }}"
+                },
+                "subcategory": {
+                  "name": "{{ ctx.metadata.ticket_subcategory }}"
+                },
+                "item": {
+                  "name": "{{ ctx.metadata.ticket_item }}"
+                }
+              }
+            }"""
+        },
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "technician_key": "XXXXXXXXXXXXXXXXXXX",
+          "Connection": "close"
+        }
+      }
+    }
+  },
+  "metadata": {
+    "columns": "log.level,service.name,host.hostname,cloud.account.name,kubernetes.labels.team,message",
+    "amdb_name": "52009 - Failed to query Active Directory",
+    "ticket_category": "Elastic-AWS-MT",
+    "ticket_priority": "2 - High",
+    "amdb_link": "https://hedgeservcorp.sharepoint.com/sites/globaltechnology/amdb/sitepages/52009.aspx",
+    "kibana_url": "https://287d86a4b1184182b340bd5074cdfd7e.us-east-1.aws.found.io:9243/s/information-technology",
+    "extra_message": "<p><BR><BR><BR><b>*Apologies for the copy paste of these URLs, but Manage Engine does not support extemely long imbedded links</b></p>",
+    "ticket_item": "Namespace",
+    "timeRangeUnit": "m",
+    "copy_dsl": "<BR><h4>Please copy and paste the link below to your browser to see the details in Discover</h4><BR>",
+    "svc_software_owner_fallback": "TechOps",
+    "event_type": "sdpmt_52009",
+    "ticket_group2": "Service Desk Operations",
+    "timeRangeValue": 5,
+    "dashboard_link": "https://287d86a4b1184182b340bd5074cdfd7e.us-east-1.aws.found.io:9243/s/information-technology/app/r/s/5LiUA",
+    "teams_webhook_itsm": "/webhookb2/39110328-ac0c-49b2-9261-eb9e4c8b1ae4@39e63823-376a-43fc-9fdd-4a3932faab97/IncomingWebhook/0f7fcb34f7de4025bbb2b59db86ff14d/535a32ca-0c5b-41cb-aaa9-dd0ed0f6628f/V2iUlGEB_YvvFImVQ6mYWjofeQh8UgGHkbfuVHHcEo_4s1",
+    "ticket_group": "Monitoring and Analytics - Testing",
+    "copy_dbl": "<p>Please copy and paste the link below to your browser to see the details in Dashboard</p>",
+    "ticket_subcategory": "K8s",
+    "id": "sdpmt_52009"
+  },
+  "transform": {
+    "script": {
+      "source": """
+              
+        // grab targets with open tickets and remember their IDs in a map
+        Map opened = ctx.payload.open_tickets.hits.hits.stream().collect(Collectors.toMap(h -> h._source.host.target, h -> h._source.ticket_id));
+        
+        // store two lists of host buckets
+        List to_open = [];
+        List to_comment = [];
+        
+        for (Map host: ctx.payload.errors.aggregations.host.buckets) {
+
+          // Extract svc_software_owner with fallback logic
+          def sourceDoc = host.details.hits.hits[0]._source;
+          String svcSoftwareOwner = ctx.metadata.svc_software_owner_fallback;
+
+          // Check if aws.tags field exists and has the svc-software-owner tag
+          if (sourceDoc.containsKey('kubernetes') && 
+              sourceDoc.kubernetes.containsKey('labels') && 
+              sourceDoc.kubernetes.labels.containsKey('teams')) {
+              
+            String dynamicValue = sourceDoc.kubernetes.labels['teams'];
+            
+            // Only use the dynamic value if it's not null and not empty
+            if (dynamicValue != null && dynamicValue != '') {
+              svcSoftwareOwner = dynamicValue;
+            }
+          }
+
+          host.svc_software_owner = svcSoftwareOwner;
+      
+          if (opened.containsKey(host.key)) {
+            host.ticket_id = opened[host.key];
+            to_comment.add(host);
+          } else {
+            to_open.add(host);
+          }
+        }
+        // replace payload with our two lists
+        return [
+          'to_open': to_open,
+          'to_comment': to_comment
+          ];
+          """,
+      "lang": "painless"
+    }
+  }
+}
