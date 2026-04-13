@@ -1,0 +1,19 @@
+[root@MS01-11ELK01 logstash]# systemctl status logstash.service
+● logstash.service - logstash
+   Loaded: loaded (/usr/lib/systemd/system/logstash.service; enabled; vendor preset: disabled)
+   Active: deactivating (stop-sigterm) since Mon 2026-04-13 12:14:55 EDT; 1h 4min ago
+ Main PID: 2262 (java)
+   CGroup: /system.slice/logstash.service
+           └─2262 /usr/share/logstash/jdk/bin/java -Xms24g -Xmx24g -Djava.awt.headless=true -Dfile.encoding=UTF-8 -Djruby.compile.invokedynamic=true -Djruby.jit.threshold=0 ...
+
+Apr 13 13:16:35 MS01-11ELK01 logstash[2262]: [2026-04-13T13:16:35,693][ERROR][logstash.licensechecker.licensereader] Unable to retrieve Elasticsearch cluster info...lableError}
+Apr 13 13:16:35 MS01-11ELK01 logstash[2262]: [2026-04-13T13:16:35,694][ERROR][logstash.licensechecker.licensereader] Unable to retrieve license information from l...nnections"}
+Apr 13 13:17:05 MS01-11ELK01 logstash[2262]: [2026-04-13T13:17:05,693][ERROR][logstash.licensechecker.licensereader] Unable to retrieve Elasticsearch cluster info...lableError}
+Apr 13 13:17:05 MS01-11ELK01 logstash[2262]: [2026-04-13T13:17:05,694][ERROR][logstash.licensechecker.licensereader] Unable to retrieve license information from l...nnections"}
+Apr 13 13:17:35 MS01-11ELK01 logstash[2262]: [2026-04-13T13:17:35,693][ERROR][logstash.licensechecker.licensereader] Unable to retrieve Elasticsearch cluster info...lableError}
+Apr 13 13:17:35 MS01-11ELK01 logstash[2262]: [2026-04-13T13:17:35,694][ERROR][logstash.licensechecker.licensereader] Unable to retrieve license information from l...nnections"}
+Apr 13 13:18:05 MS01-11ELK01 logstash[2262]: [2026-04-13T13:18:05,693][ERROR][logstash.licensechecker.licensereader] Unable to retrieve Elasticsearch cluster info...lableError}
+Apr 13 13:18:05 MS01-11ELK01 logstash[2262]: [2026-04-13T13:18:05,694][ERROR][logstash.licensechecker.licensereader] Unable to retrieve license information from l...nnections"}
+Apr 13 13:18:35 MS01-11ELK01 logstash[2262]: [2026-04-13T13:18:35,694][ERROR][logstash.licensechecker.licensereader] Unable to retrieve Elasticsearch cluster info...lableError}
+Apr 13 13:18:35 MS01-11ELK01 logstash[2262]: [2026-04-13T13:18:35,695][ERROR][logstash.licensechecker.licensereader] Unable to retrieve license information from l...nnections"}
+Hint: Some lines were ellipsized, use -l to show in full.
